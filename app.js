@@ -1,6 +1,6 @@
 // ============================================================
-// app.js - 小闪光 Soft Light
-// 功能：记录日常闪光点 → AI 温暖回复 → 相册/小结持久化
+// app.js - 小闪光 Soft Light（诊断版，带详细日志）
+// 部署后打开 F12 → Console，按提示看 LOG 输出
 // ============================================================
 
 // ---------- DOM 元素 ----------
@@ -19,6 +19,9 @@ const pages = {
   summary: document.getElementById("page-summary"),
 };
 
+// ---------- 全局缓存：内存里永远有一份，不依赖异步刷新 ----------
+let memoryRecords = [];
+
 // ---------- Tab 切换 ----------
 function switchTab(tab) {
   Object.values(pages).forEach(p => p.style.display = "none");
@@ -26,8 +29,8 @@ function switchTab(tab) {
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
   document.getElementById("tab-" + tab).classList.add("active");
 
-  if (tab === "album") loadAlbum();
-  if (tab === "summary") loadSummary();
+  if (tab === "album") renderAlbum();
+  if (tab === "summary") renderSummary();
 }
 
 tabRecords?.addEventListener("click", () => switchTab("records"));
@@ -67,6 +70,7 @@ function compressImage(file) {
 
 // ---------- 保存记录 ----------
 async function saveRecord(text, imageBase64, reply) {
+  console.log("📤 [save] 开始保存...");
   try {
     const res = await fetch("/.netlify/functions/save", {
       method: "POST",
@@ -78,12 +82,14 @@ async function saveRecord(text, imageBase64, reply) {
         date: new Date().toISOString(),
       }),
     });
+    console.log("📤 [save] 响应状态:", res.status);
     const data = await res.json();
+    console.log("📤 [save] 响应数据:", data);
     if (!data.success) throw new Error(data.error);
     console.log("☁️ 云端保存成功", data.id);
     return true;
   } catch (err) {
-    console.warn("云端保存失败，降级 localStorage", err);
+    console.warn("⚠️ 云端保存失败，降级 localStorage", err);
     fallbackToLocal(text, imageBase64, reply);
     return false;
   }
@@ -99,73 +105,59 @@ function fallbackToLocal(text, imageBase64, reply) {
     reply,
     date: new Date().toISOString(),
   });
-  // 只保留最近 50 条
   if (records.length > 50) records.splice(50);
   localStorage.setItem("softlight_records", JSON.stringify(records));
+  console.log("💾 localStorage 已写入，条数:", records.length);
 }
 
-// ---------- 渲染单条记录 DOM ----------
-function renderRecordElement(record) {
-  const div = document.createElement("div");
-  div.className = "record-item";
-  div.innerHTML = `
-    <p class="record-text">${escapeHtml(record.text)}</p>
-    ${record.image ? `<img src="${record.image}" class="record-img" style="max-width:200px;border-radius:8px;margin:8px 0;">` : ""}
-    ${record.reply ? `<p class="record-reply" style="color:#e8967a;font-style:italic;">💬 ${escapeHtml(record.reply)}</p>` : ""}
-    <p class="record-date" style="font-size:12px;color:#bbb;">${formatDate(record.date)}</p>
-  `;
-  return div;
-}
-
-// ---------- 加载记录列表（首页） ----------
-async function loadRecords() {
-  if (!recordsContainer) return;
-  recordsContainer.innerHTML = "<p style='color:#999;'>加载中...</p>";
-
-  let records = [];
+// ---------- 从云端拉数据，更新内存缓存 ----------
+async function fetchFromCloud() {
   try {
-    const res = await fetch("/.netlify/functions/list");
+    const res = await fetch("/.netlify/functions/list", { cache: "no-store" });
+    console.log("📥 [list] 响应状态:", res.status);
     if (res.ok) {
-      records = await res.json();
+      const records = await res.json();
+      console.log("📥 [list] 返回条数:", records.length, records);
+      if (Array.isArray(records)) {
+        memoryRecords = records;
+      }
     } else {
-      throw new Error("fetch failed");
+      throw new Error("list fetch failed: " + res.status);
     }
-  } catch {
-    // 降级读 localStorage
-    records = JSON.parse(localStorage.getItem("softlight_records") || "[]");
+  } catch (err) {
+    console.warn("⚠️ 云端读取失败，降级 localStorage", err);
+    memoryRecords = JSON.parse(localStorage.getItem("softlight_records") || "[]");
   }
+}
 
-  if (records.length === 0) {
+// ---------- 渲染：全部基于 memoryRecords，同步、无闪烁 ----------
+function renderRecords() {
+  if (!recordsContainer) return;
+  if (memoryRecords.length === 0) {
     recordsContainer.innerHTML = "<p style='color:#999;'>还没有记录，写下今天的小闪光吧 ✨</p>";
     return;
   }
-
   recordsContainer.innerHTML = "";
-  records.forEach(record => {
-    recordsContainer.appendChild(renderRecordElement(record));
+  memoryRecords.forEach(record => {
+    const div = document.createElement("div");
+    div.className = "record-item";
+    div.innerHTML = `
+      <p class="record-text">${escapeHtml(record.text)}</p>
+      ${record.image ? `<img src="${record.image}" class="record-img" style="max-width:200px;border-radius:8px;margin:8px 0;">` : ""}
+      ${record.reply ? `<p class="record-reply" style="color:#e8967a;font-style:italic;">💬 ${escapeHtml(record.reply)}</p>` : ""}
+      <p class="record-date" style="font-size:12px;color:#bbb;">${formatDate(record.date)}</p>
+    `;
+    recordsContainer.appendChild(div);
   });
 }
 
-// ---------- 加载相册 ----------
-async function loadAlbum() {
+function renderAlbum() {
   if (!albumContainer) return;
-  albumContainer.innerHTML = "<p style='color:#999;'>加载中...</p>";
-
-  let records = [];
-  try {
-    const res = await fetch("/.netlify/functions/list");
-    if (res.ok) records = await res.json();
-    else throw new Error("fetch failed");
-  } catch {
-    records = JSON.parse(localStorage.getItem("softlight_records") || "[]");
-  }
-
-  const withImages = records.filter(r => r.image);
+  const withImages = memoryRecords.filter(r => r.image);
   if (withImages.length === 0) {
     albumContainer.innerHTML = "<p style='color:#999;'>还没有照片，去记录第一条吧 📷</p>";
     return;
   }
-
   albumContainer.innerHTML = "";
   albumContainer.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;padding:8px;";
   withImages.forEach(record => {
@@ -177,40 +169,24 @@ async function loadAlbum() {
   });
 }
 
-// ---------- 加载小结 ----------
-async function loadSummary() {
+function renderSummary() {
   if (!summaryContent) return;
-  summaryContent.innerHTML = "<p style='color:#999;'>加载中...</p>";
-
-  let records = [];
-  try {
-    const res = await fetch("/.netlify/functions/list");
-    if (res.ok) records = await res.json();
-    else throw new Error("fetch failed");
-  } catch {
-    records = JSON.parse(localStorage.getItem("softlight_records") || "[]");
-  }
-
-  if (records.length === 0) {
+  if (memoryRecords.length === 0) {
     summaryContent.innerHTML = "<p style='color:#999;'>还没有数据，去记录第一条吧 ✨</p>";
     return;
   }
-
-  const total = records.length;
-  const withImage = records.filter(r => r.image).length;
-  const allText = records.map(r => r.text).join("");
+  const total = memoryRecords.length;
+  const withImage = memoryRecords.filter(r => r.image).length;
+  const allText = memoryRecords.map(r => r.text).join("");
   const totalChars = allText.length;
-  const dates = [...new Set(records.map(r => r.date.split("T")[0]))].sort();
+  const dates = [...new Set(memoryRecords.map(r => r.date.split("T")[0]))].sort();
   const streak = calcStreak(dates);
-
-  // 本周记录
-  const thisWeek = records.filter(r => {
+  const thisWeek = memoryRecords.filter(r => {
     const d = new Date(r.date);
     const now = new Date();
     const diff = (now - d) / 86400000;
     return diff <= 7;
   }).length;
-
   summaryContent.innerHTML = `
     <div style="line-height:2;">
       <p>📝 累计记录：<strong>${total}</strong> 条</p>
@@ -220,6 +196,14 @@ async function loadSummary() {
       <p>📅 本周记录：<strong>${thisWeek}</strong> 条</p>
     </div>
   `;
+}
+
+// 一键刷新所有视图（同步，无异步竞态）
+function renderAll() {
+  console.log("🎨 [renderAll] memoryRecords 条数:", memoryRecords.length);
+  renderRecords();
+  renderAlbum();
+  renderSummary();
 }
 
 // ---------- 连续天数计算 ----------
@@ -261,6 +245,17 @@ form?.addEventListener("submit", async (e) => {
     imageBase64 = await compressImage(imageInput.files[0]);
   }
 
+  // 立刻把这条临时加进内存并渲染 → 用户立即看到，绝不依赖云端
+  const optimistic = {
+    id: "temp-" + Date.now(),
+    text,
+    image: imageBase64,
+    reply: "AI 正在思考温暖的话...",
+    date: new Date().toISOString(),
+  };
+  memoryRecords.unshift(optimistic);
+  renderAll();
+
   // 请求 AI（带降级兜底）
   let reply = "今天也值得被看见。";
   try {
@@ -277,17 +272,11 @@ form?.addEventListener("submit", async (e) => {
     console.warn("AI 请求失败，用兜底文案");
   }
 
-  // 先乐观展示（用占位 id，待会儿会被 loadRecords 整体替换，但视觉上无闪烁）
-  const tempRecord = {
-    id: "temp-" + Date.now(),
-    text,
-    image: imageBase64,
-    reply: reply,
-    date: new Date().toISOString(),
-  };
-  prependRecord(tempRecord);
+  // 更新内存中这条的 reply（就地改，不再整列重渲）
+  optimistic.reply = reply;
+  renderAll();
 
-  // 保存到云端（等待完全成功）
+  // 保存到云端（不 await 也不影响页面，页面已显示）
   await saveRecord(text, imageBase64, reply);
 
   // 重置表单
@@ -296,19 +285,13 @@ form?.addEventListener("submit", async (e) => {
   submitBtn.disabled = false;
   submitBtn.textContent = "保存闪光 ✨";
 
-  // 等待 Blobs 写入对 list 可见，再统一刷新全部 Tab
-  await new Promise(r => setTimeout(r, 300));
-  loadRecords();
-  loadAlbum();
-  loadSummary();
+  // 保存完成后，后台静默同步一次云端真实数据（替换临时 id）
+  await fetchFromCloud();
+  // 关键：用内存数据重新渲染，临时节点被真实数据无缝替换
+  renderAll();
+  console.log("✅ [submit] 完成，最终条数:", memoryRecords.length);
 });
-
-// ---------- 预展示 ----------
-function prependRecord(record) {
-  if (!recordsContainer) return;
-  recordsContainer.prepend(renderRecordElement(record));
-}
 
 // ---------- 页面加载 ----------
 switchTab("records");
-loadRecords();
+fetchFromCloud().then(() => renderAll());
