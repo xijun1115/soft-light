@@ -1,218 +1,316 @@
-const $ = (s) => document.querySelector(s);
-const STORE_KEY = 'softlight_entries';
+// ============================================================
+// app.js - 小闪光 Soft Light
+// 功能：记录日常闪光点 → AI 温暖回复 → 相册/小结持久化
+// ============================================================
 
-let entries = [];
-try {
-  entries = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
-} catch (e) {
-  entries = [];
+// ---------- DOM 元素 ----------
+const form = document.getElementById("record-form");
+const textInput = document.getElementById("text-input");
+const imageInput = document.getElementById("image-input");
+const recordsContainer = document.getElementById("records-container");
+const albumContainer = document.getElementById("album-container");
+const summaryContent = document.getElementById("summary-content");
+const tabRecords = document.getElementById("tab-records");
+const tabAlbum = document.getElementById("tab-album");
+const tabSummary = document.getElementById("tab-summary");
+const pages = {
+  records: document.getElementById("page-records"),
+  album: document.getElementById("page-album"),
+  summary: document.getElementById("page-summary"),
+};
+
+// ---------- Tab 切换 ----------
+function switchTab(tab) {
+  Object.values(pages).forEach(p => p.style.display = "none");
+  pages[tab].style.display = "block";
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.getElementById("tab-" + tab).classList.add("active");
+
+  if (tab === "album") loadAlbum();
+  if (tab === "summary") loadSummary();
 }
 
-let pendingMedia = [];
+tabRecords?.addEventListener("click", () => switchTab("records"));
+tabAlbum?.addEventListener("click", () => switchTab("album"));
+tabSummary?.addEventListener("click", () => switchTab("summary"));
 
-function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-}
-
-// 安全存储：超限自动降级为纯文字
-function saveEntries() {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(entries));
-  } catch (e) {
-    if (e.name === 'QuotaExceededError' || e.code === 22) {
-      // 丢弃图片，只保留文字
-      const textOnly = entries.map(e => ({
-        id: e.id,
-        ts: e.ts,
-        text: e.text,
-        media: [],
-        reply: e.reply
-      }));
-      try {
-        localStorage.setItem(STORE_KEY, JSON.stringify(textOnly));
-        alert('图片太大已自动跳过，仅保存文字内容。');
-      } catch (e2) {
-        // 连文字都存不下，只保留最近 20 条
-        const recent = textOnly.slice(-20);
-        localStorage.setItem(STORE_KEY, JSON.stringify(recent));
-        entries = recent;
-        alert('存储已满，已自动保留最近 20 条记录。');
-      }
-    }
-  }
-}
-
-function renderAlbum() {
-  const box = $('#albumList');
-  if (!box) return;
-  if (entries.length === 0) {
-    box.innerHTML = '<p style="color:#999;text-align:center;padding:20px;">还没有记录，去记一件小事吧 ✨</p>';
-    return;
-  }
-  box.innerHTML = entries.slice().reverse().map(e => `
-    <div class="card">
-      <div class="date">${new Date(e.ts).toLocaleString('zh-CN')}</div>
-      <div>${e.text}</div>
-      ${e.media && e.media.length > 0
-        ? e.media.map(m => m.type === 'image'
-            ? `<img src="${m.data}" />`
-            : `<video src="${m.data}" controls></video>`).join('')
-        : ''}
-      ${e.reply ? `<div class="reply">Soft Light：${e.reply}</div>` : ''}
-    </div>
-  `).join('');
-}
-
-function renderSummary() {
-  const box = $('#summaryBox');
-  if (!box) return;
-  const now = new Date();
-  const ym = now.getFullYear() + '-' + (now.getMonth() + 1);
-  const monthEntries = entries.filter(e => {
-    const d = new Date(e.ts);
-    return d.getFullYear() + '-' + (d.getMonth() + 1) === ym;
-  });
-  const chars = monthEntries.map(e => e.text).join('');
-  const freq = {};
-  for (const c of chars) {
-    if (c.trim() && c !== ' ') freq[c] = (freq[c] || 0) + 1;
-  }
-  const topChar = Object.entries(freq).sort((a, b) => b[1] - a[1])[0];
-
-  box.innerHTML = `
-    <p>这个月（${ym}）你记录了 <b>${monthEntries.length}</b> 件小事。</p>
-    ${topChar ? `<p>最常出现的字是「<b>${topChar[0]}</b>」。</p>` : '<p>继续记，会有发现。</p>'}
-    <p>普通的一天，也被你接住了。</p>
-  `;
-}
-
-// 图片压缩：避免 localStorage 爆满
-function compressImage(file, maxSize = 400) {
+// ---------- 图片压缩 ----------
+function compressImage(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
-        const canvas = document.createElement('canvas');
+        const canvas = document.createElement("canvas");
+        const MAX = 400;
         let { width, height } = img;
-        if (width > height) {
-          if (width > maxSize) { height = height * maxSize / width; width = maxSize; }
-        } else {
-          if (height > maxSize) { width = width * maxSize / height; height = maxSize; }
+        if (width > MAX || height > MAX) {
+          if (width > height) {
+            height = (height / width) * MAX;
+            width = MAX;
+          } else {
+            width = (width / height) * MAX;
+            height = MAX;
+          }
         }
         canvas.width = width;
         canvas.height = height;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', 0.6));
+        resolve(canvas.toDataURL("image/jpeg", 0.6));
       };
-      img.onerror = () => resolve(reader.result); // 兜底
-      img.src = reader.result;
+      img.src = e.target.result;
     };
-    reader.onerror = () => resolve(null);
     reader.readAsDataURL(file);
   });
 }
 
-function handleFiles(input, type) {
-  for (const file of input.files) {
-    if (type === 'image') {
-      compressImage(file).then(dataUrl => {
-        if (dataUrl) {
-          pendingMedia.push({ type: 'image', data: dataUrl });
-          const el = document.createElement('img');
-          el.src = dataUrl;
-          $('#preview').appendChild(el);
-        }
-      });
-    } else {
-      // 视频不压缩，直接读（注意：大视频仍可能爆存储）
-      const reader = new FileReader();
-      reader.onload = () => {
-        pendingMedia.push({ type: 'video', data: reader.result });
-        const el = document.createElement('video');
-        el.src = reader.result;
-        el.controls = true;
-        $('#preview').appendChild(el);
-      };
-      reader.readAsDataURL(file);
-    }
-  }
-  input.value = '';
-}
-
-// 修正：AI 函数路径为 .netlify/functions/ai
-async function getAIReply(text) {
+// ---------- 保存记录 ----------
+async function saveRecord(text, imageBase64, reply) {
   try {
-    const res = await fetch('.netlify/functions/ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text || '今天记了一件事' })
+    const res = await fetch("/.netlify/functions/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        image: imageBase64 || null,
+        reply,
+        date: new Date().toISOString(),
+      }),
     });
-    if (!res.ok) throw new Error('network not ok');
     const data = await res.json();
-    return data.reply || '今天也值得被看见。';
-  } catch (e) {
-    return '今天也值得被看见。';
+    if (!data.success) throw new Error(data.error);
+    console.log("☁️ 云端保存成功", data.id);
+  } catch (err) {
+    console.warn("云端保存失败，降级 localStorage", err);
+    fallbackToLocal(text, imageBase64, reply);
   }
 }
 
-// 事件绑定
-const photoInput = $('#photoInput');
-const videoInput = $('#videoInput');
-if (photoInput) photoInput.addEventListener('change', (e) => handleFiles(e.target, 'image'));
-if (videoInput) videoInput.addEventListener('change', (e) => handleFiles(e.target, 'video'));
+// ---------- localStorage 降级 ----------
+function fallbackToLocal(text, imageBase64, reply) {
+  const records = JSON.parse(localStorage.getItem("softlight_records") || "[]");
+  records.unshift({
+    id: Date.now().toString(),
+    text,
+    image: imageBase64 || null,
+    reply,
+    date: new Date().toISOString(),
+  });
+  // 只保留最近 50 条
+  if (records.length > 50) records.splice(50);
+  localStorage.setItem("softlight_records", JSON.stringify(records));
+}
 
-const saveBtn = $('#saveBtn');
-if (saveBtn) {
-  saveBtn.addEventListener('click', async () => {
-    const text = $('#entryText').value.trim();
-    if (!text && pendingMedia.length === 0) return;
+// ---------- 加载记录列表（首页） ----------
+async function loadRecords() {
+  if (!recordsContainer) return;
+  recordsContainer.innerHTML = "<p style='color:#999;'>加载中...</p>";
 
-    const aiReplyEl = $('#aiReply');
-    if (aiReplyEl) aiReplyEl.textContent = 'Soft Light 正在想……';
+  let records = [];
+  try {
+    const res = await fetch("/.netlify/functions/list");
+    if (res.ok) {
+      records = await res.json();
+    } else {
+      throw new Error("fetch failed");
+    }
+  } catch {
+    // 降级读 localStorage
+    records = JSON.parse(localStorage.getItem("softlight_records") || "[]");
+  }
 
-    const reply = await getAIReply(text);
+  if (records.length === 0) {
+    recordsContainer.innerHTML = "<p style='color:#999;'>还没有记录，写下今天的小闪光吧 ✨</p>";
+    return;
+  }
 
-    const entry = {
-      id: uid(),
-      ts: Date.now(),
-      text: text,
-      media: pendingMedia.slice(),
-      reply: reply
-    };
-    entries.push(entry);
-    saveEntries();
-
-    $('#entryText').value = '';
-    pendingMedia = [];
-    const preview = $('#preview');
-    if (preview) preview.innerHTML = '';
-    if (aiReplyEl) aiReplyEl.textContent = 'Soft Light：' + reply;
-
-    renderAlbum();
-    renderSummary();
+  recordsContainer.innerHTML = "";
+  records.forEach(record => {
+    const div = document.createElement("div");
+    div.className = "record-item";
+    div.innerHTML = `
+      <p class="record-text">${escapeHtml(record.text)}</p>
+      ${record.image ? `<img src="${record.image}" class="record-img" style="max-width:200px;border-radius:8px;margin:8px 0;">` : ""}
+      ${record.reply ? `<p class="record-reply" style="color:#e8967a;font-style:italic;">💬 ${escapeHtml(record.reply)}</p>` : ""}
+      <p class="record-date" style="font-size:12px;color:#bbb;">${formatDate(record.date)}</p>
+    `;
+    recordsContainer.appendChild(div);
   });
 }
 
-// Tab 切换
-document.querySelectorAll('nav button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    btn.classList.add('active');
-    const tab = $('#' + btn.dataset.tab);
-    if (tab) tab.classList.add('active');
-    if (btn.dataset.tab === 'album') renderAlbum();
-    if (btn.dataset.tab === 'summary') renderSummary();
+// ---------- 加载相册 ----------
+async function loadAlbum() {
+  if (!albumContainer) return;
+  albumContainer.innerHTML = "<p style='color:#999;'>加载中...</p>";
+
+  let records = [];
+  try {
+    const res = await fetch("/.netlify/functions/list");
+    if (res.ok) records = await res.json();
+    else throw new Error("fetch failed");
+  } catch {
+    records = JSON.parse(localStorage.getItem("softlight_records") || "[]");
+  }
+
+  const withImages = records.filter(r => r.image);
+  if (withImages.length === 0) {
+    albumContainer.innerHTML = "<p style='color:#999;'>还没有照片，去记录第一条吧 📷</p>";
+    return;
+  }
+
+  albumContainer.innerHTML = "";
+  albumContainer.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;padding:8px;";
+  withImages.forEach(record => {
+    const img = document.createElement("img");
+    img.src = record.image;
+    img.style.cssText = "width:100%;height:140px;object-fit:cover;border-radius:8px;";
+    img.title = record.text;
+    albumContainer.appendChild(img);
   });
+}
+
+// ---------- 加载小结 ----------
+async function loadSummary() {
+  if (!summaryContent) return;
+  summaryContent.innerHTML = "<p style='color:#999;'>加载中...</p>";
+
+  let records = [];
+  try {
+    const res = await fetch("/.netlify/functions/list");
+    if (res.ok) records = await res.json();
+    else throw new Error("fetch failed");
+  } catch {
+    records = JSON.parse(localStorage.getItem("softlight_records") || "[]");
+  }
+
+  if (records.length === 0) {
+    summaryContent.innerHTML = "<p style='color:#999;'>还没有数据，去记录第一条吧 ✨</p>";
+    return;
+  }
+
+  const total = records.length;
+  const withImage = records.filter(r => r.image).length;
+  const allText = records.map(r => r.text).join("");
+  const totalChars = allText.length;
+  const dates = [...new Set(records.map(r => r.date.split("T")[0]))].sort();
+  const streak = calcStreak(dates);
+
+  // 本周记录
+  const thisWeek = records.filter(r => {
+    const d = new Date(r.date);
+    const now = new Date();
+    const diff = (now - d) / 86400000;
+    return diff <= 7;
+  }).length;
+
+  summaryContent.innerHTML = `
+    <div style="line-height:2;">
+      <p>📝 累计记录：<strong>${total}</strong> 条</p>
+      <p>📷 带图片：<strong>${withImage}</strong> 条</p>
+      <p>✍️ 总字数：<strong>${totalChars}</strong> 字</p>
+      <p>🔥 连续记录：<strong>${streak}</strong> 天</p>
+      <p>📅 本周记录：<strong>${thisWeek}</strong> 条</p>
+    </div>
+  `;
+}
+
+// ---------- 连续天数计算 ----------
+function calcStreak(dates) {
+  if (dates.length === 0) return 0;
+  let streak = 1;
+  for (let i = dates.length - 1; i > 0; i--) {
+    const diff = (new Date(dates[i]) - new Date(dates[i - 1])) / 86400000;
+    if (diff === 1) streak++;
+    else break;
+  }
+  return streak;
+}
+
+// ---------- 工具函数 ----------
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function formatDate(iso) {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// ---------- 提交表单 ----------
+form?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = textInput.value.trim();
+  if (!text) return;
+
+  const submitBtn = form.querySelector("button[type=submit]");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "保存中...";
+
+  let imageBase64 = null;
+  if (imageInput.files[0]) {
+    imageBase64 = await compressImage(imageInput.files[0]);
+  }
+
+  // 先展示用户自己的记录
+  const tempRecord = {
+    id: "temp",
+    text,
+    image: imageBase64,
+    reply: "AI 正在思考温暖的话...",
+    date: new Date().toISOString(),
+  };
+  prependRecord(tempRecord);
+
+  // 请求 AI（带降级兜底）
+  let reply = "今天也值得被看见。";
+  try {
+    const aiRes = await fetch("/.netlify/functions/ai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (aiRes.ok) {
+      const aiData = await aiRes.json();
+      reply = aiData.reply || reply;
+    }
+  } catch {
+    console.warn("AI 请求失败，用兜底文案");
+  }
+
+  // 更新页面上的回复
+  const lastReply = recordsContainer.querySelector(".record-reply");
+  if (lastReply) lastReply.textContent = "💬 " + reply;
+
+  // 保存到云端
+  await saveRecord(text, imageBase64, reply);
+
+  // 重置表单
+  textInput.value = "";
+  imageInput.value = "";
+  submitBtn.disabled = false;
+  submitBtn.textContent = "保存闪光 ✨";
+
+  // 刷新记录列表
+  loadRecords();
 });
 
-// 初始化
-const quotes = ['今天也辛苦了。', '普通的一天，也有光。', '你记得的事，都算数。'];
-const dailyQuote = $('#dailyQuote');
-if (dailyQuote) {
-  dailyQuote.textContent = quotes[Math.floor(Math.random() * quotes.length)];
+// ---------- 预展示 ----------
+function prependRecord(record) {
+  if (!recordsContainer) return;
+  const div = document.createElement("div");
+  div.className = "record-item";
+  div.innerHTML = `
+    <p class="record-text">${escapeHtml(record.text)}</p>
+    ${record.image ? `<img src="${record.image}" class="record-img" style="max-width:200px;border-radius:8px;margin:8px 0;">` : ""}
+    <p class="record-reply" style="color:#e8967a;font-style:italic;">💬 ${escapeHtml(record.reply)}</p>
+    <p class="record-date" style="font-size:12px;color:#bbb;">刚刚</p>
+  `;
+  recordsContainer.prepend(div);
 }
-renderAlbum();
-renderSummary();
+
+// ---------- 页面加载 ----------
+switchTab("records");
+loadRecords();
