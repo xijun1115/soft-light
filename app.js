@@ -18,6 +18,35 @@ const pages = {
   summary: document.getElementById("page-summary"),
 };
 
+// ---------- 自定义确认弹窗 DOM ----------
+let confirmOverlay, confirmText, confirmCancelBtn, confirmOkBtn;
+let confirmResolve = null;
+
+function initConfirmDialog() {
+  confirmOverlay = document.getElementById("confirm-overlay");
+  confirmText = document.getElementById("confirm-text");
+  confirmCancelBtn = document.getElementById("confirm-cancel");
+  confirmOkBtn = document.getElementById("confirm-ok");
+
+  confirmCancelBtn.addEventListener("click", () => {
+    confirmOverlay.classList.remove("show");
+    if (confirmResolve) confirmResolve(false);
+  });
+
+  confirmOkBtn.addEventListener("click", () => {
+    confirmOverlay.classList.remove("show");
+    if (confirmResolve) confirmResolve(true);
+  });
+}
+
+function showConfirm(message) {
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    confirmText.textContent = message;
+    confirmOverlay.classList.add("show");
+  });
+}
+
 // ---------- 全局缓存 ----------
 let memoryRecords = [];
 
@@ -73,17 +102,12 @@ async function saveRecord(text, imageBase64, reply) {
     const res = await fetch("/.netlify/functions/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        image: imageBase64 || null,
-        reply,
-        date: new Date().toISOString(),
-      }),
+      body: JSON.stringify({ text, image: imageBase64 || null, reply, date: new Date().toISOString() }),
     });
     if (!res.ok) throw new Error("save failed: " + res.status);
     const data = await res.json();
     if (!data.success) throw new Error(data.error);
-    return data.id; // 返回云端真实 id
+    return data.id;
   } catch (err) {
     console.warn("⚠️ 云端保存失败，降级 localStorage", err);
     fallbackToLocal(text, imageBase64, reply);
@@ -94,15 +118,25 @@ async function saveRecord(text, imageBase64, reply) {
 // ---------- localStorage 降级 ----------
 function fallbackToLocal(text, imageBase64, reply) {
   const records = JSON.parse(localStorage.getItem("softlight_records") || "[]");
-  records.unshift({
-    id: Date.now().toString(),
-    text,
-    image: imageBase64 || null,
-    reply,
-    date: new Date().toISOString(),
-  });
+  records.unshift({ id: Date.now().toString(), text, image: imageBase64 || null, reply, date: new Date().toISOString() });
   if (records.length > 50) records.splice(50);
   localStorage.setItem("softlight_records", JSON.stringify(records));
+}
+
+// ---------- 删除记录 ----------
+async function deleteRecord(id) {
+  try {
+    const res = await fetch("/.netlify/functions/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    return data.success === true;
+  } catch (err) {
+    console.error("删除失败:", err);
+    return false;
+  }
 }
 
 // ---------- 从云端拉数据 ----------
@@ -112,13 +146,8 @@ async function fetchFromCloud() {
     if (!res.ok) return;
     const cloudRecords = await res.json();
     if (!Array.isArray(cloudRecords)) return;
-
-    // 合并：保留内存中云端还没有的乐观记录
     const cloudIds = new Set(cloudRecords.map(r => String(r.id)));
-    const optimisticRecords = memoryRecords.filter(r =>
-      String(r.id).startsWith("temp-") && !cloudIds.has(String(r.id))
-    );
-
+    const optimisticRecords = memoryRecords.filter(r => String(r.id).startsWith("temp-") && !cloudIds.has(String(r.id)));
     memoryRecords = [...cloudRecords, ...optimisticRecords];
   } catch (err) {
     console.warn("⚠️ 云端读取失败，保留本地内存", err);
@@ -141,6 +170,9 @@ function renderRecords() {
       ${record.image ? `<img src="${record.image}" class="record-img" style="max-width:200px;border-radius:8px;margin:8px 0;">` : ""}
       ${record.reply ? `<p class="record-reply" style="color:#e8967a;font-style:italic;">💬 ${escapeHtml(record.reply)}</p>` : ""}
       <p class="record-date" style="font-size:12px;color:#bbb;">${formatDate(record.date)}</p>
+      <div class="record-actions">
+        <button class="delete-btn" data-id="${record.id}">🗑️ 删除</button>
+      </div>
     `;
     recordsContainer.appendChild(div);
   });
@@ -156,11 +188,14 @@ function renderAlbum() {
   albumContainer.innerHTML = "";
   albumContainer.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;padding:8px;";
   withImages.forEach(record => {
-    const img = document.createElement("img");
-    img.src = record.image;
-    img.style.cssText = "width:100%;height:140px;object-fit:cover;border-radius:8px;";
-    img.title = record.text;
-    albumContainer.appendChild(img);
+    const wrap = document.createElement("div");
+    wrap.className = "album-item";
+    wrap.style.cssText = "position:relative;";
+    wrap.innerHTML = `
+      <img src="${record.image}" style="width:100%;height:140px;object-fit:cover;border-radius:8px;">
+      <button class="delete-btn album-delete" data-id="${record.id}" title="删除">×</button>
+    `;
+    albumContainer.appendChild(wrap);
   });
 }
 
@@ -197,6 +232,36 @@ function renderAll() {
   renderRecords();
   renderAlbum();
   renderSummary();
+}
+
+// ---------- 删除事件绑定 ----------
+function bindDeleteEvents() {
+  recordsContainer?.addEventListener("click", handleDeleteClick);
+  albumContainer?.addEventListener("click", handleDeleteClick);
+}
+
+async function handleDeleteClick(e) {
+  const btn = e.target.closest(".delete-btn");
+  if (!btn) return;
+
+  const id = btn.dataset.id;
+  const record = memoryRecords.find(r => String(r.id) === String(id));
+  const text = record?.text || "";
+
+  // 自定义确认弹窗
+  const ok = await showConfirm(`确定要删除这条闪光吗？\n\n「${text}」`);
+  if (!ok) return;
+
+  // 乐观删除
+  memoryRecords = memoryRecords.filter(r => String(r.id) !== String(id));
+  renderAll();
+
+  const success = await deleteRecord(id);
+  if (!success) {
+    alert("删除失败，请稍后重试");
+    await fetchFromCloud();
+    renderAll();
+  }
 }
 
 // ---------- 工具函数 ----------
@@ -237,7 +302,6 @@ form?.addEventListener("submit", async (e) => {
     imageBase64 = await compressImage(imageInput.files[0]);
   }
 
-  // 乐观记录：立刻显示
   const optimisticId = "temp-" + Date.now();
   const optimistic = {
     id: optimisticId,
@@ -263,23 +327,15 @@ form?.addEventListener("submit", async (e) => {
     }
   } catch {}
 
-  // 更新 reply
   optimistic.reply = reply;
   renderAll();
 
-  // 保存云端
   const realId = await saveRecord(text, imageBase64, reply);
+  if (realId) optimistic.id = realId;
 
-  // 用真实 id 替换乐观 id
-  if (realId) {
-    optimistic.id = realId;
-  }
-
-  // 后台同步
   await fetchFromCloud();
   renderAll();
 
-  // 重置表单
   textInput.value = "";
   imageInput.value = "";
   submitBtn.disabled = false;
@@ -288,4 +344,6 @@ form?.addEventListener("submit", async (e) => {
 
 // ---------- 页面加载 ----------
 switchTab("records");
+initConfirmDialog();
+bindDeleteEvents();
 fetchFromCloud().then(() => renderAll());
