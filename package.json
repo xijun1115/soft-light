@@ -1,0 +1,24 @@
+{
+  "name": "soft-light",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xijun1115/soft-light.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/xijun1115/soft-light/issues"
+  },
+  "homepage": "https://github.com/xijun1115/soft-light#readme",
+  "dependencies": {
+    "@netlify/blobs": "^11.0.3"
+  }
+}
