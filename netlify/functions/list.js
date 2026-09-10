@@ -3,29 +3,26 @@ import { getStore } from "@netlify/blobs";
 export default async (req, context) => {
   try {
     const store = getStore("records");
-    const objects = await store.list();
-
-    if (!objects || objects.length === 0) {
+    const records = await store.get("all");
+    
+    if (!records) {
       return new Response(JSON.stringify([]), {
         headers: { "Content-Type": "application/json" }
       });
     }
-
-    // 并行读取所有记录
-    const records = await Promise.all(
-      objects.map(async (obj) => {
-        const data = await store.get(obj.key, { type: "json" });
-        return data;
-      })
-    );
-
-    // 按时间倒序
-    records.sort((a, b) => b.id - a.id);
-
-    return new Response(JSON.stringify(records), {
+    
+    // get() 返回的是字符串，需要 JSON.parse
+    const parsed = JSON.parse(records);
+    const sorted = Array.isArray(parsed) ? parsed : [];
+    sorted.sort((a, b) => b.id - a.id);
+    
+    return new Response(JSON.stringify(sorted), {
       headers: { "Content-Type": "application/json" }
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+    // 任何错误都返回空数组，不抛 500
+    return new Response(JSON.stringify([]), {
+      headers: { "Content-Type": "application/json" }
+    });
   }
 };

@@ -15,19 +15,29 @@ export default async (req, context) => {
 
     const store = getStore("records");
 
-    // 用时间戳做 key
-    const key = Date.now().toString();
+    // 读现有
+    let records = [];
+    try {
+      const existing = await store.get("all");
+      records = existing ? JSON.parse(existing) : [];
+    } catch (e) {
+      records = [];
+    }
+
+    // 追加
     const record = {
-      id: key,
+      id: Date.now().toString(),
       text,
-      image: image || null,   // base64 字符串
+      image: image || null,
       reply: reply || "",
       date: date || new Date().toISOString(),
     };
+    records.push(record);
 
-    await store.setJSON(key, record);
+    // 写回（不用 setJSON，直接用 set + 字符串）
+    await store.set("all", JSON.stringify(records));
 
-    return new Response(JSON.stringify({ success: true, id: key }), {
+    return new Response(JSON.stringify({ success: true, id: record.id }), {
       headers: { "Content-Type": "application/json" }
     });
   } catch (err) {
