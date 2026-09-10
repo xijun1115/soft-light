@@ -276,6 +276,23 @@ function calcStreak(dates) {
   return streak;
 }
 
+// 本地兜底：AI 完全不可用时，按内容挑一句，避免所有回复一模一样
+const LOCAL_FALLBACKS = [
+  "今天也值得被看见。",
+  "记下来这件事，就足够温柔了。",
+  "你已经做得挺好的。",
+  "这一点点，也是光。",
+  "慢慢来，你在往前走。",
+];
+
+function pickLocalFallback(seed) {
+  let h = 0;
+  for (const ch of String(seed)) {
+    h = (h * 31 + ch.codePointAt(0)) % 1000003;
+  }
+  return LOCAL_FALLBACKS[h % LOCAL_FALLBACKS.length];
+}
+
 function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
@@ -314,7 +331,7 @@ form?.addEventListener("submit", async (e) => {
   renderAll();
 
   // AI 请求
-  let reply = "今天也值得被看见。";
+  let reply = "";
   try {
     const aiRes = await fetch("/.netlify/functions/ai", {
       method: "POST",
@@ -323,9 +340,16 @@ form?.addEventListener("submit", async (e) => {
     });
     if (aiRes.ok) {
       const aiData = await aiRes.json();
-      reply = aiData.reply || reply;
+      reply = aiData.reply || "";
+      // ok === false 表示 AI 没真正生成，用的是兜底语（如余额不足）
+      if (aiData.ok === false) {
+        console.warn("⚠️ AI 未生成，已用兜底语:", aiData.error);
+      }
     }
-  } catch {}
+  } catch (err) {
+    console.warn("⚠️ AI 函数请求失败:", err);
+  }
+  if (!reply) reply = pickLocalFallback(text);
 
   optimistic.reply = reply;
   renderAll();
@@ -341,6 +365,9 @@ form?.addEventListener("submit", async (e) => {
   submitBtn.disabled = false;
   submitBtn.textContent = "保存闪光 ✨";
 });
+
+// ---------- 访问打点（失败不影响主流程） ----------
+fetch("/.netlify/functions/stats", { method: "POST" }).catch(() => {});
 
 // ---------- 页面加载 ----------
 switchTab("records");

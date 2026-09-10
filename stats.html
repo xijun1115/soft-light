@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小闪光 · 数据</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    background: linear-gradient(180deg,#fff8f0 0%,#fef3e2 100%);
+    min-height:100vh; color:#5a4a3a; padding:24px 16px 40px;
+  }
+  .wrap { max-width:640px; margin:0 auto; }
+  h1 { font-size:20px; color:#e8967a; font-weight:600; text-align:center; }
+  .sub { text-align:center; font-size:13px; color:#b8a494; margin:6px 0 20px; }
+  .gate { display:flex; gap:8px; margin-bottom:24px; }
+  .gate input {
+    flex:1; padding:10px 14px; border:1px solid #f0e0d0; border-radius:10px;
+    font-size:14px; outline:none; background:#fff; font-family:inherit;
+  }
+  .gate input:focus { border-color:#e8967a; }
+  .gate button {
+    padding:10px 18px; border:none; border-radius:10px; background:#e8967a;
+    color:#fff; font-size:14px; cursor:pointer;
+  }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin-bottom:20px; }
+  .card { background:#fff; border-radius:14px; padding:16px; box-shadow:0 2px 8px rgba(0,0,0,0.04); }
+  .card .n { font-size:26px; font-weight:600; color:#e8967a; }
+  .card .l { font-size:12px; color:#b8a494; margin-top:4px; }
+  .panel { background:#fff; border-radius:14px; padding:16px; box-shadow:0 2px 8px rgba(0,0,0,0.04); margin-bottom:16px; }
+  .panel h2 { font-size:14px; color:#8a7a6a; font-weight:600; margin-bottom:12px; }
+  .bars { display:flex; align-items:flex-end; gap:4px; height:110px; }
+  .bar-col { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .bar { width:100%; background:#f4d9c6; border-radius:4px 4px 0 0; min-height:2px; position:relative; }
+  .bar span { position:absolute; top:-16px; left:50%; transform:translateX(-50%); font-size:10px; color:#b8a494; }
+  .bar-col i { font-size:9px; color:#c8b8a8; font-style:normal; }
+  .list { font-size:13px; line-height:1.9; }
+  .list li { list-style:none; padding:6px 0; border-bottom:1px dashed #f0e0d0; }
+  .list li:last-child { border:none; }
+  .list em { color:#c8b8a8; font-size:11px; font-style:normal; margin-left:6px; }
+  .hint { text-align:center; color:#b8a494; font-size:13px; padding:30px 0; }
+  .err { text-align:center; color:#e74c3c; font-size:13px; padding:20px 0; }
+  a { color:#e8967a; }
+  .foot { text-align:center; margin-top:20px; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>✨ 小闪光 · 数据</h1>
+  <p class="sub">看看有多少人在用</p>
+
+  <div class="gate">
+    <input id="key" type="password" placeholder="统计密钥">
+    <button id="go">查看</button>
+  </div>
+
+  <div id="out"><p class="hint">输入密钥后查看</p></div>
+
+  <p class="foot"><a href="/">← 回到小闪光</a></p>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const out = $("#out");
+
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${d.getMonth()+1}/${d.getDate()}`;
+}
+
+function load(k) {
+  out.innerHTML = '<p class="hint">加载中...</p>';
+  fetch(`/.netlify/functions/stats?k=${encodeURIComponent(k)}&days=14`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) {
+        out.innerHTML = `<p class="err">${d.error === "forbidden" ? "密钥不对" : d.error}</p>`;
+        return;
+      }
+      localStorage.setItem("sl_stats_key", k);
+
+      const max = Math.max(1, ...d.series.map(s => s.pv));
+      const bars = d.series.map(s => `
+        <div class="bar-col">
+          <div class="bar" style="height:${Math.round(s.pv / max * 90)}px">
+            ${s.pv ? `<span>${s.pv}</span>` : ""}
+          </div>
+          <i>${fmtDate(s.date)}</i>
+        </div>`).join("");
+
+      out.innerHTML = `
+        <div class="cards">
+          <div class="card"><div class="n">${d.uv}</div><div class="l">累计访客 (UV)</div></div>
+          <div class="card"><div class="n">${d.pv}</div><div class="l">累计访问 (PV)</div></div>
+          <div class="card"><div class="n">${d.records}</div><div class="l">闪光总数</div></div>
+          <div class="card"><div class="n">${d.withImage}</div><div class="l">带图闪光</div></div>
+          <div class="card"><div class="n">${d.todayUv}</div><div class="l">今日访客</div></div>
+          <div class="card"><div class="n">${d.todayRecords}</div><div class="l">今日闪光</div></div>
+        </div>
+
+        <div class="panel">
+          <h2>最近 14 天访问量</h2>
+          <div class="bars">${bars}</div>
+        </div>
+
+        <div class="panel">
+          <h2>最新闪光</h2>
+          <ul class="list">
+            ${d.recent.length ? d.recent.map(r =>
+              `<li>${escapeHtml(r.text)}<em>${fmtDate(r.date)}</em></li>`).join("")
+              : "<li>还没有</li>"}
+          </ul>
+        </div>
+      `;
+    })
+    .catch(e => { out.innerHTML = `<p class="err">加载失败: ${e.message}</p>`; });
+}
+
+function escapeHtml(t) {
+  const d = document.createElement("div");
+  d.textContent = t;
+  return d.innerHTML;
+}
+
+$("#go").addEventListener("click", () => {
+  const k = $("#key").value.trim();
+  if (k) load(k);
+});
+$("#key").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("#go").click();
+});
+
+// 自动填入：URL 参数 > 本地缓存
+const params = new URLSearchParams(location.search);
+const fromUrl = params.get("k");
+const saved = localStorage.getItem("sl_stats_key");
+if (fromUrl) { $("#key").value = fromUrl; load(fromUrl); }
+else if (saved) { $("#key").value = saved; load(saved); }
+</script>
+</body>
+</html>
