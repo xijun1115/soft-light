@@ -116,17 +116,23 @@ async function fetchFromCloud() {
     const res = await fetch("/.netlify/functions/list", { cache: "no-store" });
     console.log("📥 [list] 响应状态:", res.status);
     if (res.ok) {
-      const records = await res.json();
-      console.log("📥 [list] 返回条数:", records.length, records);
-      if (Array.isArray(records)) {
-        memoryRecords = records;
+      const cloudRecords = await res.json();
+      console.log("📥 [list] 返回条数:", cloudRecords.length, cloudRecords);
+      if (Array.isArray(cloudRecords)) {
+        // 🔑 关键：把云端数据里没有的"临时记录"保留下来
+        const cloudIds = new Set(cloudRecords.map(r => r.id));
+        const optimisticRecords = memoryRecords.filter(r => 
+          r.id.startsWith("temp-") && !cloudIds.has(r.id)
+        );
+        // 云端数据放前面，乐观记录跟在后面
+        memoryRecords = [...cloudRecords, ...optimisticRecords];
       }
     } else {
       throw new Error("list fetch failed: " + res.status);
     }
   } catch (err) {
     console.warn("⚠️ 云端读取失败，降级 localStorage", err);
-    memoryRecords = JSON.parse(localStorage.getItem("softlight_records") || "[]");
+    // 读取失败时不覆盖内存，保留现有数据
   }
 }
 
