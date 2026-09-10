@@ -3,7 +3,7 @@ import { getStore } from "@netlify/blobs";
 export default async (req, context) => {
   try {
     const store = getStore("records");
-    const { objects } = await store.list();
+    const objects = await store.list();
 
     if (!objects || objects.length === 0) {
       return new Response(JSON.stringify([]), {
