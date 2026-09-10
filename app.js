@@ -47,6 +47,27 @@ function showConfirm(message) {
   });
 }
 
+// ---------- 设备身份 ----------
+// 每个浏览器一个 id，只存在本地。服务端靠它隔离数据：
+// 不登录、不留手机号，但每个人只看得到自己写的东西。
+function getClientId() {
+  try {
+    let cid = localStorage.getItem("sl_client_id");
+    if (!cid) {
+      cid =
+        (crypto && crypto.randomUUID && crypto.randomUUID()) ||
+        "c-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem("sl_client_id", cid);
+    }
+    return cid;
+  } catch {
+    // 隐私模式下 localStorage 不可用，退化成一次性 id
+    return "anon-" + Math.random().toString(36).slice(2, 12);
+  }
+}
+
+const CLIENT_ID = getClientId();
+
 // ---------- 全局缓存 ----------
 let memoryRecords = [];
 
@@ -102,7 +123,13 @@ async function saveRecord(text, imageBase64, reply) {
     const res = await fetch("/.netlify/functions/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, image: imageBase64 || null, reply, date: new Date().toISOString() }),
+      body: JSON.stringify({
+        text,
+        image: imageBase64 || null,
+        reply,
+        date: new Date().toISOString(),
+        cid: CLIENT_ID,
+      }),
     });
     if (!res.ok) throw new Error("save failed: " + res.status);
     const data = await res.json();
@@ -118,7 +145,14 @@ async function saveRecord(text, imageBase64, reply) {
 // ---------- localStorage 降级 ----------
 function fallbackToLocal(text, imageBase64, reply) {
   const records = JSON.parse(localStorage.getItem("softlight_records") || "[]");
-  records.unshift({ id: Date.now().toString(), text, image: imageBase64 || null, reply, date: new Date().toISOString() });
+  records.unshift({
+    id: Date.now().toString(),
+    text,
+    image: imageBase64 || null,
+    reply,
+    date: new Date().toISOString(),
+    cid: CLIENT_ID,
+  });
   if (records.length > 50) records.splice(50);
   localStorage.setItem("softlight_records", JSON.stringify(records));
 }
@@ -129,7 +163,7 @@ async function deleteRecord(id) {
     const res = await fetch("/.netlify/functions/delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ id, cid: CLIENT_ID }),
     });
     const data = await res.json();
     return data.success === true;
@@ -142,7 +176,9 @@ async function deleteRecord(id) {
 // ---------- 从云端拉数据 ----------
 async function fetchFromCloud() {
   try {
-    const res = await fetch("/.netlify/functions/list", { cache: "no-store" });
+    const res = await fetch("/.netlify/functions/list?cid=" + encodeURIComponent(CLIENT_ID), {
+      cache: "no-store",
+    });
     if (!res.ok) return;
     const cloudRecords = await res.json();
     if (!Array.isArray(cloudRecords)) return;

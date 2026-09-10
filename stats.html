@@ -71,6 +71,7 @@ function fmtDate(iso) {
 }
 
 function load(k) {
+  currentKey = k;
   out.innerHTML = '<p class="hint">加载中...</p>';
   fetch(`/.netlify/functions/stats?k=${encodeURIComponent(k)}&days=14`)
     .then(r => r.json())
@@ -98,7 +99,21 @@ function load(k) {
           <div class="card"><div class="n">${d.withImage}</div><div class="l">带图闪光</div></div>
           <div class="card"><div class="n">${d.todayUv}</div><div class="l">今日访客</div></div>
           <div class="card"><div class="n">${d.todayRecords}</div><div class="l">今日闪光</div></div>
+          <div class="card"><div class="n">${d.unclaimed}</div><div class="l">未认领(隔离前)</div></div>
         </div>
+
+        ${d.unclaimed > 0 ? `
+        <div class="panel">
+          <h2>认领历史数据</h2>
+          <p style="font-size:13px;color:#8a7a6a;line-height:1.7;margin-bottom:12px;">
+            有 ${d.unclaimed} 条是「数据隔离」上线前存的，没归属任何人，所以谁都看不到。<br>
+            点下面的按钮把它们绑到<b>这台设备</b>上（只有你能在用这个小程序的那台设备上操作）。
+          </p>
+          <button id="claim" style="padding:9px 18px;border:none;border-radius:10px;background:#e8967a;color:#fff;font-size:13px;cursor:pointer;">
+            认领到我这个设备
+          </button>
+          <span id="claimmsg" style="font-size:13px;color:#b8a494;margin-left:12px;"></span>
+        </div>` : ""}
 
         <div class="panel">
           <h2>最近 14 天访问量</h2>
@@ -124,9 +139,34 @@ function escapeHtml(t) {
   return d.innerHTML;
 }
 
+let currentKey = "";
+
 $("#go").addEventListener("click", () => {
   const k = $("#key").value.trim();
   if (k) load(k);
+});
+
+// 认领历史数据
+document.addEventListener("click", (e) => {
+  if (e.target && e.target.id !== "claim") return;
+  const cid = localStorage.getItem("sl_client_id");
+  const msg = $("#claimmsg");
+  if (!cid) {
+    msg.textContent = "这台设备还没打开过小闪光，请先去首页打开一次再回来";
+    msg.style.color = "#e74c3c";
+    return;
+  }
+  msg.textContent = "处理中...";
+  msg.style.color = "#b8a494";
+  fetch(`/.netlify/functions/stats?k=${encodeURIComponent(currentKey)}&action=claim&cid=${encodeURIComponent(cid)}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { msg.textContent = "失败: " + d.error; msg.style.color = "#e74c3c"; return; }
+      msg.textContent = `已认领 ${d.claimed} 条，刷新页面查看`;
+      msg.style.color = "#5a9e6f";
+      setTimeout(() => load(currentKey), 1200);
+    })
+    .catch(err => { msg.textContent = "失败: " + err.message; msg.style.color = "#e74c3c"; });
 });
 $("#key").addEventListener("keydown", (e) => {
   if (e.key === "Enter") $("#go").click();

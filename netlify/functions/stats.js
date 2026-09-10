@@ -5,6 +5,16 @@ import { createHash } from "node:crypto";
 // 读数据需要 ?k=STATS_KEY，避免被路人看光
 
 const SALT = process.env.STATS_SALT || "soft-light-2026";
+const MAX_SAMPLE = 300;
+
+// 不同版本 @netlify/blobs 的 list() 返回结构不同，都兼容
+function keysOf(listed) {
+  const entries = Array.isArray(listed) ? listed : (listed && listed.blobs) || [];
+  return entries.map((e) => (typeof e === "string" ? e : e && e.key)).filter(Boolean);
+}
+function idOf(key) {
+  return String(key).split(":").pop();
+}
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -94,15 +104,68 @@ export default async (req) => {
 
     const todayData = series[series.length - 1] || { pv: 0, uv: 0 };
 
-    // 闪光条数（主数据）
-    let records = [];
-    try {
-      const rs = getStore("records");
-      const raw = await rs.get("all");
-      records = raw ? JSON.parse(raw) : [];
-    } catch {
-      records = [];
+    const rs = getStore({ name: "records", consistency: "strong" });
+
+    // 认领历史数据：把迁移前没有 cid 的记录绑到指定 cid（需密钥，只能操作一次性的归属）
+    if (url.searchParams.get("action") === "claim") {
+      const cid = url.searchParams.get("cid");
+      if (!cid) {
+        return new Response(JSON.stringify({ error: "cid required" }), { status: 400 });
+      }
+      const rawClaim = await rs.get("all");
+      const list = rawClaim ? JSON.parse(rawClaim) : [];
+      let n = 0;
+      for (const r of list) {
+        if (r && !r.cid) {
+          r.cid = String(cid);
+          n++;
+        }
+      }
+      if (n > 0) await rs.set("all", JSON.stringify(list));
+      return new Response(JSON.stringify({ ok: true, claimed: n }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
+
+    // 闪光条数：新格式每条一个 key（rec:{cid}:{id}），旧格式在 "all" 数组里
+    let legacy = [];
+    try {
+      const raw = await rs.get("all");
+      legacy = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(legacy)) legacy = [];
+    } catch {
+      legacy = [];
+    }
+
+    let recKeys = [];
+    try {
+      recKeys = keysOf(await rs.list({ prefix: "rec:" }));
+    } catch {
+      recKeys = [];
+    }
+
+    const totalCount = recKeys.length + legacy.length;
+
+    // 全量读取太慢，只取最近 MAX_SAMPLE 条用于展示
+    const newest = recKeys
+      .slice()
+      .sort((a, b) => idOf(b).localeCompare(idOf(a)))
+      .slice(0, MAX_SAMPLE);
+
+    const fetched = (
+      await Promise.all(
+        newest.map(async (k) => {
+          try {
+            return await rs.get(k, { type: "json" });
+          } catch {
+            return null;
+          }
+        })
+      )
+    ).filter(Boolean);
+
+    const records = [...fetched, ...legacy];
 
     // 最近新增的 5 条（只看文字，便于感受用户真实在写什么）
     const recent = [...records]
@@ -124,8 +187,9 @@ export default async (req) => {
         since: totals.since,
         todayPv: todayData.pv,
         todayUv: todayData.uv,
-        records: records.length,
+        records: totalCount,
         withImage: records.filter((r) => r.image).length,
+        unclaimed: legacy.filter((r) => !r.cid).length,
         todayRecords,
         series,
         recent,
