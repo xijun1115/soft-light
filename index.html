@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>小闪光 · Soft Light</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>小闪光</h1>
+    <p class="sub">SOFT LIGHT</p>
+    <p class="slogan">再普通的一天，也有那么一个瞬间值得被看见。</p>
+  </header>
+
+  <nav>
+    <button data-tab="record" class="active">记录</button>
+    <button data-tab="album">相册</button>
+    <button data-tab="summary">小结</button>
+  </nav>
+
+  <main>
+    <section id="record" class="tab active">
+      <div id="dailyQuote" class="quote">今天也辛苦了。</div>
+      <textarea id="entryText" placeholder="记一件今天的小事（可只写文字）"></textarea>
+      <div class="media-row">
+        <input type="file" id="photoInput" accept="image/*" />
+        <input type="file" id="videoInput" accept="video/*" />
+      </div>
+      <div id="preview" class="preview"></div>
+      <button id="saveBtn">收下今天的闪光</button>
+      <div id="aiReply" class="ai-reply"></div>
+    </梦section>
+
+    <section id="album" class="tab">
+      <div id="albumList" class="album-list"></div>
+    </section>
+
+    <section id="summary" class="tab">
+      <div id="summaryBox" class="summary-box"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
