@@ -81,9 +81,11 @@ async function saveRecord(text, imageBase64, reply) {
     const data = await res.json();
     if (!data.success) throw new Error(data.error);
     console.log("☁️ 云端保存成功", data.id);
+    return true;
   } catch (err) {
     console.warn("云端保存失败，降级 localStorage", err);
     fallbackToLocal(text, imageBase64, reply);
+    return false;
   }
 }
 
@@ -100,6 +102,19 @@ function fallbackToLocal(text, imageBase64, reply) {
   // 只保留最近 50 条
   if (records.length > 50) records.splice(50);
   localStorage.setItem("softlight_records", JSON.stringify(records));
+}
+
+// ---------- 渲染单条记录 DOM ----------
+function renderRecordElement(record) {
+  const div = document.createElement("div");
+  div.className = "record-item";
+  div.innerHTML = `
+    <p class="record-text">${escapeHtml(record.text)}</p>
+    ${record.image ? `<img src="${record.image}" class="record-img" style="max-width:200px;border-radius:8px;margin:8px 0;">` : ""}
+    ${record.reply ? `<p class="record-reply" style="color:#e8967a;font-style:italic;">💬 ${escapeHtml(record.reply)}</p>` : ""}
+    <p class="record-date" style="font-size:12px;color:#bbb;">${formatDate(record.date)}</p>
+  `;
+  return div;
 }
 
 // ---------- 加载记录列表（首页） ----------
@@ -127,15 +142,7 @@ async function loadRecords() {
 
   recordsContainer.innerHTML = "";
   records.forEach(record => {
-    const div = document.createElement("div");
-    div.className = "record-item";
-    div.innerHTML = `
-      <p class="record-text">${escapeHtml(record.text)}</p>
-      ${record.image ? `<img src="${record.image}" class="record-img" style="max-width:200px;border-radius:8px;margin:8px 0;">` : ""}
-      ${record.reply ? `<p class="record-reply" style="color:#e8967a;font-style:italic;">💬 ${escapeHtml(record.reply)}</p>` : ""}
-      <p class="record-date" style="font-size:12px;color:#bbb;">${formatDate(record.date)}</p>
-    `;
-    recordsContainer.appendChild(div);
+    recordsContainer.appendChild(renderRecordElement(record));
   });
 }
 
@@ -254,16 +261,6 @@ form?.addEventListener("submit", async (e) => {
     imageBase64 = await compressImage(imageInput.files[0]);
   }
 
-  // 先展示用户自己的记录
-  const tempRecord = {
-    id: "temp",
-    text,
-    image: imageBase64,
-    reply: "AI 正在思考温暖的话...",
-    date: new Date().toISOString(),
-  };
-  prependRecord(tempRecord);
-
   // 请求 AI（带降级兜底）
   let reply = "今天也值得被看见。";
   try {
@@ -280,11 +277,17 @@ form?.addEventListener("submit", async (e) => {
     console.warn("AI 请求失败，用兜底文案");
   }
 
-  // 更新页面上的回复
-  const lastReply = recordsContainer.querySelector(".record-reply");
-  if (lastReply) lastReply.textContent = "💬 " + reply;
+  // 先乐观展示（用占位 id，待会儿会被 loadRecords 整体替换，但视觉上无闪烁）
+  const tempRecord = {
+    id: "temp-" + Date.now(),
+    text,
+    image: imageBase64,
+    reply: reply,
+    date: new Date().toISOString(),
+  };
+  prependRecord(tempRecord);
 
-  // 保存到云端
+  // 保存到云端（等待完全成功）
   await saveRecord(text, imageBase64, reply);
 
   // 重置表单
@@ -293,8 +296,8 @@ form?.addEventListener("submit", async (e) => {
   submitBtn.disabled = false;
   submitBtn.textContent = "保存闪光 ✨";
 
-  // 刷新记录列表
-  // 刷新所有 Tab 的数据
+  // 等待 Blobs 写入对 list 可见，再统一刷新全部 Tab
+  await new Promise(r => setTimeout(r, 300));
   loadRecords();
   loadAlbum();
   loadSummary();
@@ -303,15 +306,7 @@ form?.addEventListener("submit", async (e) => {
 // ---------- 预展示 ----------
 function prependRecord(record) {
   if (!recordsContainer) return;
-  const div = document.createElement("div");
-  div.className = "record-item";
-  div.innerHTML = `
-    <p class="record-text">${escapeHtml(record.text)}</p>
-    ${record.image ? `<img src="${record.image}" class="record-img" style="max-width:200px;border-radius:8px;margin:8px 0;">` : ""}
-    <p class="record-reply" style="color:#e8967a;font-style:italic;">💬 ${escapeHtml(record.reply)}</p>
-    <p class="record-date" style="font-size:12px;color:#bbb;">刚刚</p>
-  `;
-  recordsContainer.prepend(div);
+  recordsContainer.prepend(renderRecordElement(record));
 }
 
 // ---------- 页面加载 ----------
