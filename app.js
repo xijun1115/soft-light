@@ -1,6 +1,5 @@
 // ============================================================
-// app.js - 小闪光 Soft Light（诊断版，带详细日志）
-// 部署后打开 F12 → Console，按提示看 LOG 输出
+// app.js - 小闪光 Soft Light
 // ============================================================
 
 // ---------- DOM 元素 ----------
@@ -19,7 +18,7 @@ const pages = {
   summary: document.getElementById("page-summary"),
 };
 
-// ---------- 全局缓存：内存里永远有一份，不依赖异步刷新 ----------
+// ---------- 全局缓存 ----------
 let memoryRecords = [];
 
 // ---------- Tab 切换 ----------
@@ -70,7 +69,6 @@ function compressImage(file) {
 
 // ---------- 保存记录 ----------
 async function saveRecord(text, imageBase64, reply) {
-  console.log("📤 [save] 开始保存...");
   try {
     const res = await fetch("/.netlify/functions/save", {
       method: "POST",
@@ -82,16 +80,14 @@ async function saveRecord(text, imageBase64, reply) {
         date: new Date().toISOString(),
       }),
     });
-    console.log("📤 [save] 响应状态:", res.status);
+    if (!res.ok) throw new Error("save failed: " + res.status);
     const data = await res.json();
-    console.log("📤 [save] 响应数据:", data);
     if (!data.success) throw new Error(data.error);
-    console.log("☁️ 云端保存成功", data.id);
-    return true;
+    return data.id; // 返回云端真实 id
   } catch (err) {
     console.warn("⚠️ 云端保存失败，降级 localStorage", err);
     fallbackToLocal(text, imageBase64, reply);
-    return false;
+    return null;
   }
 }
 
@@ -107,36 +103,29 @@ function fallbackToLocal(text, imageBase64, reply) {
   });
   if (records.length > 50) records.splice(50);
   localStorage.setItem("softlight_records", JSON.stringify(records));
-  console.log("💾 localStorage 已写入，条数:", records.length);
 }
 
-// ---------- 从云端拉数据，更新内存缓存 ----------
+// ---------- 从云端拉数据 ----------
 async function fetchFromCloud() {
   try {
     const res = await fetch("/.netlify/functions/list", { cache: "no-store" });
-    console.log("📥 [list] 响应状态:", res.status);
-    if (res.ok) {
-      const cloudRecords = await res.json();
-      console.log("📥 [list] 返回条数:", cloudRecords.length, cloudRecords);
-      if (Array.isArray(cloudRecords)) {
-        // 🔑 关键：把云端数据里没有的"临时记录"保留下来
-        const cloudIds = new Set(cloudRecords.map(r => r.id));
-        const optimisticRecords = memoryRecords.filter(r => 
-          r.id.startsWith("temp-") && !cloudIds.has(r.id)
-        );
-        // 云端数据放前面，乐观记录跟在后面
-        memoryRecords = [...cloudRecords, ...optimisticRecords];
-      }
-    } else {
-      throw new Error("list fetch failed: " + res.status);
-    }
+    if (!res.ok) return;
+    const cloudRecords = await res.json();
+    if (!Array.isArray(cloudRecords)) return;
+
+    // 合并：保留内存中云端还没有的乐观记录
+    const cloudIds = new Set(cloudRecords.map(r => String(r.id)));
+    const optimisticRecords = memoryRecords.filter(r =>
+      String(r.id).startsWith("temp-") && !cloudIds.has(String(r.id))
+    );
+
+    memoryRecords = [...cloudRecords, ...optimisticRecords];
   } catch (err) {
-    console.warn("⚠️ 云端读取失败，降级 localStorage", err);
-    // 读取失败时不覆盖内存，保留现有数据
+    console.warn("⚠️ 云端读取失败，保留本地内存", err);
   }
 }
 
-// ---------- 渲染：全部基于 memoryRecords，同步、无闪烁 ----------
+// ---------- 渲染 ----------
 function renderRecords() {
   if (!recordsContainer) return;
   if (memoryRecords.length === 0) {
@@ -204,15 +193,13 @@ function renderSummary() {
   `;
 }
 
-// 一键刷新所有视图（同步，无异步竞态）
 function renderAll() {
-  console.log("🎨 [renderAll] memoryRecords 条数:", memoryRecords.length);
   renderRecords();
   renderAlbum();
   renderSummary();
 }
 
-// ---------- 连续天数计算 ----------
+// ---------- 工具函数 ----------
 function calcStreak(dates) {
   if (dates.length === 0) return 0;
   let streak = 1;
@@ -224,7 +211,6 @@ function calcStreak(dates) {
   return streak;
 }
 
-// ---------- 工具函数 ----------
 function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
@@ -251,9 +237,10 @@ form?.addEventListener("submit", async (e) => {
     imageBase64 = await compressImage(imageInput.files[0]);
   }
 
-  // 立刻把这条临时加进内存并渲染 → 用户立即看到，绝不依赖云端
+  // 乐观记录：立刻显示
+  const optimisticId = "temp-" + Date.now();
   const optimistic = {
-    id: "temp-" + Date.now(),
+    id: optimisticId,
     text,
     image: imageBase64,
     reply: "AI 正在思考温暖的话...",
@@ -262,7 +249,7 @@ form?.addEventListener("submit", async (e) => {
   memoryRecords.unshift(optimistic);
   renderAll();
 
-  // 请求 AI（带降级兜底）
+  // AI 请求
   let reply = "今天也值得被看见。";
   try {
     const aiRes = await fetch("/.netlify/functions/ai", {
@@ -274,28 +261,29 @@ form?.addEventListener("submit", async (e) => {
       const aiData = await aiRes.json();
       reply = aiData.reply || reply;
     }
-  } catch {
-    console.warn("AI 请求失败，用兜底文案");
-  }
+  } catch {}
 
-  // 更新内存中这条的 reply（就地改，不再整列重渲）
+  // 更新 reply
   optimistic.reply = reply;
   renderAll();
 
-  // 保存到云端（不 await 也不影响页面，页面已显示）
-  await saveRecord(text, imageBase64, reply);
+  // 保存云端
+  const realId = await saveRecord(text, imageBase64, reply);
+
+  // 用真实 id 替换乐观 id
+  if (realId) {
+    optimistic.id = realId;
+  }
+
+  // 后台同步
+  await fetchFromCloud();
+  renderAll();
 
   // 重置表单
   textInput.value = "";
   imageInput.value = "";
   submitBtn.disabled = false;
   submitBtn.textContent = "保存闪光 ✨";
-
-  // 保存完成后，后台静默同步一次云端真实数据（替换临时 id）
-  await fetchFromCloud();
-  // 关键：用内存数据重新渲染，临时节点被真实数据无缝替换
-  renderAll();
-  console.log("✅ [submit] 完成，最终条数:", memoryRecords.length);
 });
 
 // ---------- 页面加载 ----------
