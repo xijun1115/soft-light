@@ -294,7 +294,10 @@ form?.addEventListener("submit", async (e) => {
   submitBtn.textContent = "保存闪光 ✨";
 
   // 刷新记录列表
+  // 刷新所有 Tab 的数据
   loadRecords();
+  loadAlbum();
+  loadSummary();
 });
 
 // ---------- 预展示 ----------
