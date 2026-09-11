@@ -402,6 +402,39 @@ form?.addEventListener("submit", async (e) => {
   submitBtn.textContent = "保存闪光 ✨";
 });
 
+// ---------- 隐藏入口：连点标题 5 次进数据页 ----------
+// 访客不知道就永远触发不到；自己手机上不用记长链接
+function openStats() {
+  let k = null;
+  try {
+    k = localStorage.getItem("sl_stats_key");
+  } catch {}
+  if (!k) {
+    k = prompt("输入统计密钥（只需输一次，会记在本机）");
+    if (!k) return;
+    try {
+      localStorage.setItem("sl_stats_key", k.trim());
+    } catch {}
+  }
+  location.href = "/stats.html";
+}
+
+(function () {
+  const title = document.querySelector("header h1");
+  if (!title) return;
+  let n = 0;
+  let timer = null;
+  title.addEventListener("click", () => {
+    n++;
+    clearTimeout(timer);
+    timer = setTimeout(() => (n = 0), 1500);
+    if (n >= 5) {
+      n = 0;
+      openStats();
+    }
+  });
+})();
+
 // ---------- 访问打点（失败不影响主流程） ----------
 fetch("/.netlify/functions/stats", { method: "POST" }).catch(() => {});
 
